@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gha-oidc-secret"
+dynamic = ["version"]
+description = "GitHub Actions OIDC token validator"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pyjwt[crypto]>=2.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "gha_oidc_secret.__version__"}
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100

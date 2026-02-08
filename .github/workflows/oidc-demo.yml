@@ -1,0 +1,143 @@
+name: OIDC Authentication Demo
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  oidc-auth-demo:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Get OIDC Token
+        id: oidc
+        run: |
+          echo "Requesting OIDC token from GitHub..."
+          OIDC_TOKEN=$(curl -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://default" | jq -r '.value')
+
+          if [ -z "$OIDC_TOKEN" ] || [ "$OIDC_TOKEN" = "null" ]; then
+            echo "Failed to get OIDC token"
+            exit 1
+          fi
+
+          echo "Successfully obtained OIDC token"
+          echo "token=$OIDC_TOKEN" >> $GITHUB_OUTPUT
+
+          # Decode and display token claims (without signature verification)
+          echo ""
+          echo "Token Claims (decoded, not verified):"
+          echo "----------------------------------------"
+          echo "$OIDC_TOKEN" | cut -d'.' -f2 | base64 -d 2>/dev/null | jq '.' || echo "Could not decode token"
+
+      - name: Test authentication failure with wrong repository
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: |
+          echo "Test 1: Verify authentication FAILS with wrong repository restriction"
+          echo "======================================================================="
+          echo ""
+          echo "Starting server with --allowed-repo other/GHA-OIDC-Secret..."
+          uv run python -m gha_oidc_secret.server --allowed-repo other/GHA-OIDC-Secret > server-test1.log 2>&1 &
+          SERVER_PID=$!
+          sleep 2
+
+          echo ""
+          echo "Sending token to validator (expecting FAILURE)..."
+          RESPONSE=$(curl -s -X POST http://localhost:5000/validate \
+            -H "Content-Type: application/json" \
+            -d "{\"token\": \"$OIDC_TOKEN\"}" \
+            -w "\nHTTP_STATUS:%{http_code}")
+
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d':' -f2)
+          BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS/d')
+
+          echo "Response status: $HTTP_STATUS"
+          echo "Response body:"
+          echo "$BODY" | jq '.'
+
+          # Stop the server
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+          sleep 1
+
+          # Display server logs
+          echo ""
+          echo "Server logs:"
+          echo "----------------------------------------"
+          cat server-test1.log
+          echo "----------------------------------------"
+
+          # Verify we got a 403 Forbidden
+          if [ "$HTTP_STATUS" != "403" ]; then
+            echo ""
+            echo "[FAIL] Expected HTTP 403 but got $HTTP_STATUS"
+            exit 1
+          fi
+
+          echo ""
+          echo "[SUCCESS] Authentication correctly rejected for wrong repository"
+          echo ""
+
+      - name: Test authentication success with correct repository
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: |
+          echo "Test 2: Verify authentication SUCCEEDS with correct repository restriction"
+          echo "==========================================================================="
+          echo ""
+          echo "Starting server with --allowed-repo ${{ github.repository }}..."
+          uv run python -m gha_oidc_secret.server --allowed-repo "${{ github.repository }}" > server-test2.log 2>&1 &
+          SERVER_PID=$!
+          sleep 2
+
+          echo ""
+          echo "Sending token to validator (expecting SUCCESS)..."
+          RESPONSE=$(curl -s -X POST http://localhost:5000/validate \
+            -H "Content-Type: application/json" \
+            -d "{\"token\": \"$OIDC_TOKEN\"}" \
+            -w "\nHTTP_STATUS:%{http_code}")
+
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d':' -f2)
+          BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS/d')
+
+          echo "Response status: $HTTP_STATUS"
+          echo "Response body:"
+          echo "$BODY" | jq '.'
+
+          # Stop the server
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          # Display server logs
+          echo ""
+          echo "Server logs:"
+          echo "----------------------------------------"
+          cat server-test2.log
+          echo "----------------------------------------"
+
+          # Verify we got a 200 OK
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo ""
+            echo "[FAIL] Expected HTTP 200 but got $HTTP_STATUS"
+            exit 1
+          fi
+
+          echo ""
+          echo "[SUCCESS] Authentication correctly accepted for repository: ${{ github.repository }}"
+          echo ""

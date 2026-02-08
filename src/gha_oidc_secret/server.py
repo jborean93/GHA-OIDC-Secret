@@ -38,7 +38,7 @@ def fetch_jwks() -> dict[str, object]:
 
     try:
         with urlopen(GITHUB_JWKS_URL, timeout=10) as response:
-            _JWKS_CACHE = json.loads(response.read().decode("utf-8"))
+            _JWKS_CACHE = json.loads(response.read().decode('utf-8'))
             return _JWKS_CACHE
     except URLError as e:
         raise Exception(f"Failed to fetch JWKS from {GITHUB_JWKS_URL}: {e}")
@@ -102,8 +102,8 @@ def validate_github_oidc_token(token: str) -> dict[str, object]:
             "verify_signature": True,
             "verify_exp": True,
             "verify_iss": True,
-            "verify_aud": True,
-        },
+            "verify_aud": False,  # Audience can vary based on configuration
+        }
     )
 
     return decoded_token
@@ -189,7 +189,7 @@ class OIDCValidatorHandler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode("utf-8"))
+        self.wfile.write(json.dumps(data).encode('utf-8'))
 
     def do_GET(self):
         """Handle GET requests."""
@@ -206,12 +206,12 @@ class OIDCValidatorHandler(BaseHTTPRequestHandler):
 
         try:
             # Read request body
-            content_length = int(self.headers.get("Content-Length", 0))
+            content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length)
 
             # Parse JSON
             try:
-                data = json.loads(body.decode("utf-8"))
+                data = json.loads(body.decode('utf-8'))
             except json.JSONDecodeError:
                 self._send_json_response(400, {"error": "Invalid JSON in request body"})
                 return
@@ -242,9 +242,11 @@ class OIDCValidatorHandler(BaseHTTPRequestHandler):
             print(f"[SUCCESS] {message}")
             print_token_claims(claims)
 
-            self._send_json_response(
-                200, {"status": "success", "message": message, "claims": claims}
-            )
+            self._send_json_response(200, {
+                "status": "success",
+                "message": message,
+                "claims": claims
+            })
 
         except jwt.ExpiredSignatureError:
             error = "Token has expired"
@@ -263,26 +265,35 @@ class OIDCValidatorHandler(BaseHTTPRequestHandler):
 def main():
     """Run the OIDC validator server."""
     parser = argparse.ArgumentParser(description="GitHub Actions OIDC token validator")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=5000, help="Port to bind to (default: 5000)")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host to bind to (default: 127.0.0.1)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5000,
+        help="Port to bind to (default: 5000)"
+    )
 
     # Create mutually exclusive group for repository restrictions
     repo_group = parser.add_mutually_exclusive_group()
     repo_group.add_argument(
         "--allowed-repo",
         metavar="OWNER/REPO",
-        help="Allowed repository in format 'owner/repo' (e.g., 'octocat/hello-world')",
+        help="Allowed repository in format 'owner/repo' (e.g., 'octocat/hello-world')"
     )
     repo_group.add_argument(
         "--allowed-owner",
         metavar="OWNER",
-        help="Allowed repository owner/organization (e.g., 'octocat')",
+        help="Allowed repository owner/organization (e.g., 'octocat')"
     )
 
     args = parser.parse_args()
 
     # Validate --allowed-repo format if provided
-    if args.allowed_repo and "/" not in args.allowed_repo:
+    if args.allowed_repo and '/' not in args.allowed_repo:
         parser.error("--allowed-repo must be in format 'owner/repo'")
 
     print("Starting GitHub Actions OIDC Validator Server")

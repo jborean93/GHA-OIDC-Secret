@@ -76,12 +76,16 @@ def get_signing_key_from_jwt(token: str) -> object:
     raise Exception(f"No signing key found for kid: {kid}")
 
 
-def validate_github_oidc_token(token: str) -> dict[str, object]:
+def validate_github_oidc_token(
+    token: str,
+    audience: str | None = None,
+) -> dict[str, object]:
     """
     Validate a GitHub Actions OIDC token.
 
     Args:
         token: The JWT token from GitHub Actions
+        audience: Optional expected audience to validate
 
     Returns:
         The decoded token claims
@@ -93,17 +97,20 @@ def validate_github_oidc_token(token: str) -> dict[str, object]:
     signing_key = get_signing_key_from_jwt(token)
 
     # Decode and validate the token
+    decode_options = {
+        "verify_signature": True,
+        "verify_exp": True,
+        "verify_iss": True,
+        "verify_aud": audience is not None,
+    }
+
     decoded_token = jwt.decode(
         token,
         signing_key,
         algorithms=["RS256"],
         issuer=GITHUB_OIDC_ISSUER,
-        options={
-            "verify_signature": True,
-            "verify_exp": True,
-            "verify_iss": True,
-            "verify_aud": False,  # Audience can vary based on configuration
-        }
+        audience=audience,
+        options=decode_options,
     )
 
     return decoded_token
@@ -165,6 +172,7 @@ class OIDCValidatorHandler(BaseHTTPRequestHandler):
         *args,
         allowed_repo: str | None = None,
         allowed_owner: str | None = None,
+        allowed_audience: str | None = None,
         **kwargs,
     ):
         """
@@ -173,9 +181,11 @@ class OIDCValidatorHandler(BaseHTTPRequestHandler):
         Args:
             allowed_repo: Optional allowed repository in format 'owner/repo'
             allowed_owner: Optional allowed repository owner/organization
+            allowed_audience: Optional allowed audience
         """
         self.allowed_repo = allowed_repo
         self.allowed_owner = allowed_owner
+        self.allowed_audience = allowed_audience
         super().__init__(*args, **kwargs)
 
     def log_message(self, format, *args):
@@ -225,7 +235,7 @@ class OIDCValidatorHandler(BaseHTTPRequestHandler):
 
             # Validate the token
             print("\nReceived token validation request...")
-            claims = validate_github_oidc_token(token)
+            claims = validate_github_oidc_token(token, audience=self.allowed_audience)
 
             # Verify repository claims
             is_valid, message = verify_repository_claims(
@@ -290,6 +300,12 @@ def main():
         help="Allowed repository owner/organization (e.g., 'octocat')"
     )
 
+    parser.add_argument(
+        "--allowed-audience",
+        metavar="AUDIENCE",
+        help="Allowed audience claim (e.g., 'sts.jborean93.test')"
+    )
+
     args = parser.parse_args()
 
     # Validate --allowed-repo format if provided
@@ -303,6 +319,8 @@ def main():
         print(f"Allowed repository: {args.allowed_repo}")
     if args.allowed_owner:
         print(f"Allowed owner: {args.allowed_owner}")
+    if args.allowed_audience:
+        print(f"Allowed audience: {args.allowed_audience}")
 
     print("\nEndpoints:")
     print(f"  POST http://{args.host}:{args.port}/validate - Validate OIDC token")
@@ -314,6 +332,7 @@ def main():
         OIDCValidatorHandler,
         allowed_repo=args.allowed_repo,
         allowed_owner=args.allowed_owner,
+        allowed_audience=args.allowed_audience,
     )
     server = HTTPServer((args.host, args.port), handler)
 
